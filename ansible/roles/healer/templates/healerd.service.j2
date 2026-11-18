@@ -1,0 +1,47 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Resilience-Stack self-healing agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+# The agent binds to the Docker network gateway, which can appear late on boot.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+User={{ healer_user }}
+Group={{ healer_user }}
+SupplementaryGroups=docker {{ rs_group }}
+EnvironmentFile={{ rs_config_dir }}/healer.env
+ExecStart=/usr/local/bin/healerd
+Restart=always
+RestartSec=3
+WatchdogSec=30
+TimeoutStopSec=150
+# Keeps state.json and the deploy lock writable by the deploy user.
+UMask=0002
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths={{ rs_runtime_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

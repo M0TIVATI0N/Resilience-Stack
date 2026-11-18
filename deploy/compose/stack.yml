@@ -1,0 +1,158 @@
+# Long-lived platform services. The application itself lives in app.yml and is
+# started once per color by scripts/deploy.sh.
+name: resilience
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  resilience:
+    name: resilience
+    driver: bridge
+    ipam:
+      config:
+        # Fixed so healerd, which runs on the host, can bind to the gateway.
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+
+services:
+  nginx:
+    image: nginx:1.28-alpine
+    container_name: rs-nginx
+    restart: unless-stopped
+    ports:
+      - "${EDGE_BIND:-0.0.0.0}:${EDGE_PORT:-80}:80"
+    volumes:
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # A directory mount: atomic renames on the host stay visible inside.
+      - ${RS_RUNTIME_DIR:?}/upstream:/etc/nginx/upstream:ro
+    networks: [resilience]
+    mem_limit: 128m
+    ulimits:
+      nofile: 16384
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "nginx", "-t", "-q"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: rs-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parking
+      POSTGRES_USER: parking
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [resilience]
+    mem_limit: 512m
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parking -d parking"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: rs-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ../prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    networks: [resilience]
+    mem_limit: 768m
+    logging: *logging
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: rs-alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ../alertmanager:/etc/alertmanager:ro
+      - ${RS_RUNTIME_DIR:?}/secrets/healer_token:/run/secrets/healer_token:ro
+      - alertmanager-data:/alertmanager
+    networks: [resilience]
+    mem_limit: 128m
+    logging: *logging
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: rs-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/resilience.json
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [resilience]
+    mem_limit: 256m
+    logging: *logging
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: rs-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker)($$|/)
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks: [resilience]
+    mem_limit: 64m
+    logging: *logging
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    container_name: rs-cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --housekeeping_interval=2s
+      - --docker_only=true
+      - --store_container_labels=false
+      - --disable_metrics=advtcp,cpu_topology,disk,diskIO,hugetlb,memory_numa,percpu,referenced_memory,resctrl,sched,tcp,udp
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks: [resilience]
+    mem_limit: 256m
+    logging: *logging

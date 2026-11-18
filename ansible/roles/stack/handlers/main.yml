@@ -1,0 +1,6 @@
+---
+- name: Restart monitoring
+  ansible.builtin.command:
+    cmd: docker compose -f compose/stack.yml --env-file .env restart prometheus alertmanager grafana
+    chdir: "{{ rs_home }}"
+  changed_when: true

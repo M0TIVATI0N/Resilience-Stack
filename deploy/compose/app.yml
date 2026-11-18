@@ -1,0 +1,44 @@
+# One color of the application. deploy.sh runs this file as project rs-blue or
+# rs-green with APP_COLOR, APP_IMAGE and APP_VERSION set.
+name: rs-${APP_COLOR:?}
+
+networks:
+  resilience:
+    external: true
+
+services:
+  app:
+    image: ${APP_IMAGE:?}
+    container_name: app-${APP_COLOR:?}
+    restart: unless-stopped
+    environment:
+      APP_COLOR: ${APP_COLOR:?}
+      APP_VERSION: ${APP_VERSION:?}
+      DATABASE_URL: postgres://parking:${POSTGRES_PASSWORD:?}@postgres:5432/parking?sslmode=disable
+      GOMEMLIMIT: 100MiB
+    labels:
+      resilience.role: app
+      resilience.color: ${APP_COLOR:?}
+      resilience.version: ${APP_VERSION:?}
+    networks: [resilience]
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 1.0
+    pids_limit: 128
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/parkd", "healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 3
+      start_period: 20s
+      start_interval: 1s

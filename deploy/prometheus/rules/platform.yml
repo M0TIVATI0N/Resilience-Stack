@@ -1,0 +1,65 @@
+# Informational alerts. The agent forwards them to Telegram and takes no action.
+groups:
+  - name: platform-health
+    rules:
+      - alert: ActiveReleaseDown
+        expr: up{job="app"} == 0 and on (color) healer_active_release_info == 1
+        for: 15s
+        labels:
+          severity: critical
+          action: notify
+        annotations:
+          summary: "The live container app-{{ $labels.color }} is not answering scrapes"
+
+      - alert: ReleaseSlowResponses
+        expr: app:http_latency_p95:rate1m > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          action: notify
+        annotations:
+          summary: "p95 latency of release {{ $labels.version }} is {{ $value | humanizeDuration }}"
+
+      - alert: DatabaseErrors
+        expr: sum by (query) (rate(db_query_errors_total{job="app"}[1m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          action: notify
+        annotations:
+          summary: "Database operation {{ $labels.query }} is failing"
+
+      - alert: RollbackFailed
+        expr: increase(healer_rollbacks_total{result!="success"}[5m]) > 0
+        labels:
+          severity: critical
+          action: notify
+        annotations:
+          summary: "An automatic rollback did not complete cleanly"
+
+      - alert: HostHighMemory
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+        for: 2m
+        labels:
+          severity: warning
+          action: notify
+        annotations:
+          summary: "Host memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: HostHighCPU
+        expr: 1 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          action: notify
+        annotations:
+          summary: "Host CPU usage is {{ $value | humanizePercentage }}"
+
+      - alert: HostDiskAlmostFull
+        expr: 1 - node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          action: notify
+        annotations:
+          summary: "Root filesystem is {{ $value | humanizePercentage }} full"

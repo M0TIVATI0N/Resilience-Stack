@@ -1,0 +1,23 @@
+route:
+  receiver: healer
+  group_by: [alertname, version, color]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 4h
+  routes:
+    # Rollback signals skip batching: every second here is user-visible.
+    - matchers: ['action="rollback"']
+      receiver: healer
+      group_wait: 0s
+      group_interval: 5s
+      repeat_interval: 1m
+
+receivers:
+  - name: healer
+    webhook_configs:
+      - url: http://172.30.0.1:9095/v1/alerts
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/healer_token

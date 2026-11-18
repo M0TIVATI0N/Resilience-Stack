@@ -1,0 +1,11 @@
+---
+# Copy to vault.yml, fill in, then run: ansible-vault encrypt group_vars/all/vault.yml
+
+# Letters and digits only: this value is embedded in a connection URL.
+vault_postgres_password: "generate-with-openssl-rand-hex-24"
+vault_grafana_admin_password: "generate-with-openssl-rand-hex-24"
+# At least 32 characters.
+vault_healer_token: "generate-with-openssl-rand-hex-32"
+
+vault_telegram_bot_token: ""
+vault_telegram_chat_id: ""

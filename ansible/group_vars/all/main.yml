@@ -1,0 +1,30 @@
+---
+# Docker Hub repository CI pushes to.
+app_image_repo: yourname/parkd
+
+rs_home: /opt/resilience
+rs_runtime_dir: /var/lib/resilience
+rs_config_dir: /etc/resilience
+rs_group: resilience
+
+healer_user: healer
+deploy_user: deploy
+
+# Must match the network defined in deploy/compose/stack.yml.
+rs_network_subnet: 172.30.0.0/24
+rs_network_gateway: 172.30.0.1
+healer_port: 9095
+healer_watch_window: 2m
+
+edge_port: 80
+
+# Public half of the key stored in the DEPLOY_SSH_KEY GitHub secret.
+ci_deploy_public_key: ""
+
+# Empty values leave Telegram off; messages then go to the agent's journal.
+telegram_bot_token: "{{ vault_telegram_bot_token | default('') }}"
+telegram_chat_id: "{{ vault_telegram_chat_id | default('') }}"
+
+docker_arch_map:
+  x86_64: amd64
+  aarch64: arm64

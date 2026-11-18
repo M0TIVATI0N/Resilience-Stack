@@ -1,0 +1,6 @@
+---
+- name: Restart healerd
+  ansible.builtin.systemd_service:
+    name: healerd
+    state: restarted
+    daemon_reload: true

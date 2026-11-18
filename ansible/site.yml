@@ -1,0 +1,36 @@
+---
+- name: Provision a Resilience-Stack server
+  hosts: resilience
+  become: true
+
+  pre_tasks:
+    - name: Check the operating system
+      ansible.builtin.assert:
+        that: ansible_facts['os_family'] == 'Debian'
+        fail_msg: Only Debian and Ubuntu servers are supported.
+
+    - name: Check the required settings
+      ansible.builtin.assert:
+        that:
+          - app_image_repo is defined
+          - app_image_repo != 'yourname/parkd'
+          - vault_postgres_password is defined
+          - vault_grafana_admin_password is defined
+          - vault_healer_token is defined
+          - vault_postgres_password is match('^[A-Za-z0-9]{16,}$')
+          - vault_grafana_admin_password | length >= 12
+          - vault_healer_token | length >= 32
+        fail_msg: Set app_image_repo and fill in group_vars/all/vault.yml first.
+        quiet: true
+
+  roles:
+    - role: base
+      tags: [base]
+    - role: firewall
+      tags: [firewall]
+    - role: docker
+      tags: [docker]
+    - role: stack
+      tags: [stack]
+    - role: healer
+      tags: [healer]

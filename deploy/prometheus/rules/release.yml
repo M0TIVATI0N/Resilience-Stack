@@ -1,0 +1,58 @@
+# Alerts labelled action=rollback are the agent's rollback signals. The agent
+# acts on them only inside the watch window that follows a deploy.
+groups:
+  - name: release-health
+    interval: 5s
+    rules:
+      - record: app:http_requests:rate30s
+        expr: sum by (version, color) (rate(http_requests_total{job="app"}[30s]))
+
+      - record: app:http_errors:rate30s
+        expr: sum by (version, color) (rate(http_requests_total{job="app", code=~"5.."}[30s]))
+
+      - record: app:http_error_ratio:rate30s
+        expr: app:http_errors:rate30s / app:http_requests:rate30s
+
+      - record: app:http_latency_p95:rate1m
+        expr: histogram_quantile(0.95, sum by (le, version, color) (rate(http_request_duration_seconds_bucket{job="app"}[1m])))
+
+      - record: app:db_latency_p95:rate1m
+        expr: histogram_quantile(0.95, sum by (le, query) (rate(db_query_duration_seconds_bucket{job="app"}[1m])))
+
+      - alert: ReleaseHighErrorRate
+        # The traffic floor stops a single failed request on an idle service
+        # from reading as a 100% error rate.
+        expr: (app:http_error_ratio:rate30s > 0.05) and (app:http_requests:rate30s > 0.5)
+        for: 10s
+        labels:
+          severity: critical
+          action: rollback
+          reason: high_error_rate
+        annotations:
+          summary: "Release {{ $labels.version }} answers {{ $value | humanizePercentage }} of requests with 5xx"
+          value: "{{ $value }}"
+
+      - alert: ReleaseMemoryLeak
+        expr: |
+          max by (color) (container_memory_working_set_bytes{name=~"app-(blue|green)"})
+            / max by (color) (container_spec_memory_limit_bytes{name=~"app-(blue|green)"})
+          > 0.85
+        for: 10s
+        labels:
+          severity: critical
+          action: rollback
+          reason: memory_leak
+        annotations:
+          summary: "Container app-{{ $labels.color }} uses {{ $value | humanizePercentage }} of its memory limit"
+          value: "{{ $value }}"
+
+      - alert: ReleaseOOMKilled
+        # Backup path: the agent normally sees the Docker event first.
+        expr: increase(container_oom_events_total{name=~"app-(blue|green)"}[1m]) > 0
+        labels:
+          severity: critical
+          action: rollback
+          reason: oom_killed
+        annotations:
+          summary: "Container {{ $labels.name }} was killed for exceeding its memory limit"
+          value: "{{ $value }}"

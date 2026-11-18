@@ -1,0 +1,122 @@
+---
+- name: Install the reboot detector before upgrading the kernel
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade all packages, including the kernel
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Check whether the upgrade requires a reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: base_reboot_required
+
+- name: Reboot into the new kernel
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+  when: base_reboot_required.stat.exists
+  tags: [reboot]
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - acl
+      - ca-certificates
+      - chrony
+      - curl
+      - fail2ban
+      - gnupg
+      - jq
+      - python3-systemd
+      - ufw
+      - util-linux
+    state: present
+
+- name: Tune the kernel for a busy reverse proxy
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-resilience.conf
+    reload: true
+  loop:
+    - { name: net.core.somaxconn, value: "4096" }
+    - { name: net.ipv4.tcp_max_syn_backlog, value: "4096" }
+    - { name: net.ipv4.ip_local_port_range, value: "10240 65000" }
+    - { name: vm.swappiness, value: "10" }
+    - { name: net.ipv4.ip_forward, value: "1" }
+  tags: [sysctl]
+
+- name: Create the shared service group
+  ansible.builtin.group:
+    name: "{{ rs_group }}"
+    system: true
+
+- name: Create the agent's primary group
+  ansible.builtin.group:
+    name: "{{ healer_user }}"
+    system: true
+
+- name: Create the agent user
+  ansible.builtin.user:
+    name: "{{ healer_user }}"
+    group: "{{ healer_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    groups: "{{ rs_group }}"
+    append: true
+
+- name: Create the deploy user
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    system: true
+    shell: /bin/bash
+    create_home: true
+    groups: "{{ rs_group }}"
+    append: true
+
+- name: Disable SSH password logins
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-resilience.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
+      MaxAuthTries 4
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  # Never lock out an operator who is connected with a password right now.
+  when: ansible_password is not defined and ansible_ssh_pass is not defined
+  notify: Reload ssh
+
+# Debian 12 has no /var/log/auth.log, so the sshd jail must read the journal.
+- name: Point fail2ban at the systemd journal
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    content: |
+      [sshd]
+      enabled = true
+      backend = systemd
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: Enable the core services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - chrony
+    - fail2ban

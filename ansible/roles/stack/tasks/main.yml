@@ -1,0 +1,100 @@
+---
+- name: Create the application directory
+  ansible.builtin.file:
+    path: "{{ rs_home }}"
+    state: directory
+    owner: root
+    group: "{{ rs_group }}"
+    mode: "0755"
+
+- name: Create the runtime directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ rs_group }}"
+    # Setgid keeps files written by deploy.sh and healerd in the shared group.
+    mode: "2775"
+  loop:
+    - "{{ rs_runtime_dir }}"
+    - "{{ rs_runtime_dir }}/upstream"
+
+- name: Create the secrets directory
+  ansible.builtin.file:
+    path: "{{ rs_runtime_dir }}/secrets"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy the stack configuration
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../deploy/{{ item }}/"
+    dest: "{{ rs_home }}/{{ item }}/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  loop:
+    - compose
+    - nginx
+    - prometheus
+    - alertmanager
+    - grafana
+  notify: Restart monitoring
+
+- name: Copy the deploy scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../deploy/scripts/"
+    dest: "{{ rs_home }}/scripts/"
+    owner: root
+    group: root
+    mode: "0755"
+    directory_mode: "0755"
+
+- name: Render the stack environment
+  ansible.builtin.template:
+    src: stack.env.j2
+    dest: "{{ rs_home }}/.env"
+    owner: root
+    group: "{{ rs_group }}"
+    mode: "0640"
+  no_log: true
+
+- name: Store the webhook token for Alertmanager
+  ansible.builtin.copy:
+    content: "{{ vault_healer_token }}"
+    dest: "{{ rs_runtime_dir }}/secrets/healer_token"
+    # Alertmanager runs as nobody inside its container.
+    owner: "65534"
+    group: "65534"
+    mode: "0400"
+  no_log: true
+  notify: Restart monitoring
+
+- name: Create the initial nginx routing file
+  ansible.builtin.copy:
+    content: |
+      # Managed by deploy.sh and healerd. Do not edit.
+      server app-blue:8080 resolve;
+    dest: "{{ rs_runtime_dir }}/upstream/active.conf"
+    owner: root
+    group: "{{ rs_group }}"
+    mode: "0644"
+    # Routing belongs to deploy.sh and healerd after the first run.
+    force: false
+
+- name: Start the platform services
+  ansible.builtin.command:
+    cmd: docker compose -f compose/stack.yml --env-file .env up --detach --wait --wait-timeout 300
+    chdir: "{{ rs_home }}"
+  register: stack_up
+  changed_when: "'Started' in stack_up.stderr or 'Recreated' in stack_up.stderr"
+
+- name: Restrict the CI key to deploying a commit
+  ansible.posix.authorized_key:
+    user: "{{ deploy_user }}"
+    key: "{{ ci_deploy_public_key }}"
+    key_options: 'command="{{ rs_home }}/scripts/ci-deploy.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty'
+    exclusive: true
+  when: ci_deploy_public_key | length > 0
